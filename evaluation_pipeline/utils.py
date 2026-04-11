@@ -42,6 +42,8 @@ def get_logits(outputs: Any) -> torch.Tensor:
         else:
             print("Unknown name for output of the model!")
             exit()
+    elif isinstance(outputs, dict):
+        encoding = outputs["logits"]
     else:
         print(f"Add support for output type: {type(outputs)}!")
         exit()

@@ -81,11 +81,13 @@ def get_p_enc_dec(sentence, word, model, tokenizer):  # gets p of word (word) gi
 def get_p2(sentence, word, model, tokenizer):  # as get_p if len(tokenizer(word)) == 1; else, sums logP of subword tokens
     inpts = tokenizer(sentence, return_tensors="pt").to(DEVICE)
     with torch.no_grad():
-        outputs = model(**inpts)
+        input_ids = inpts["input_ids"]
+        maps = inpts["maps"]
+        outputs = model(input_ids.unsqueeze(0), maps=maps)
         logits = get_logits(outputs)[:, -1, :].cpu()
     target = tokenizer(word, add_special_tokens=False)["input_ids"]  # Check whether tokenizer adds a whitespace to the beginning of input.
     if len(target) == 1:
-        target_id = target[0]
+        target_id = target[0][-1]
         p = torch.softmax(logits[0], dim=-1)[target_id].item()
         return p, 0
     else:

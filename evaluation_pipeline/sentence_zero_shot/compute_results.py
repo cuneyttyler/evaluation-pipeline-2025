@@ -59,7 +59,7 @@ def rank_and_evaluate(args, subset_to_stats, all_log_probs, raw_sentences, label
     for temp, temp_dict in subset_to_stats.items():
         stacked_probs = torch.stack(all_log_probs[temp], dim=1)
         chosen_sentences = torch.max(stacked_probs, dim=1)[1].tolist()
-
+        
         for raw_sentence_dict, chosen_sentence, label, metadata, uid in zip(raw_sentences, chosen_sentences, labels, metadatas, uids):
             is_correct = chosen_sentence == label
             for key, value in metadata.items():
@@ -116,8 +116,10 @@ def compute_causal_results(args, model, dataloader, temperatures):
         all_log_probs = {temp : [] for temp in subset_to_stats}
         for prefix in prefixes:
             if no_image:
+                # print(sentence_dict[f"{prefix}_inputs"])
                 logits = model(
                     input_ids=sentence_dict[f"{prefix}_inputs"].to(DEVICE),
+                    maps=sentence_dict[f"{prefix}_maps"],
                     attention_mask=sentence_dict[f"{prefix}_attn_mask"].to(DEVICE),
                 )
             else:
@@ -131,15 +133,12 @@ def compute_causal_results(args, model, dataloader, temperatures):
             else:
                 logits = logits["logits"]  # BxTxV
 
-            if logits.size(1) != sentence_dict[f"{prefix}_inputs"].size(1):  # Assumption is that images are prepended to the text when done post-tokenization.
-                logits = logits[:, -sentence_dict[f"{prefix}_inputs"].size(1):]
-
             for temp in subset_to_stats:
                 log_probs = F.log_softmax(logits / temp, dim=-1)
                 target_log_probs = torch.gather(log_probs, -1, sentence_dict[f"{prefix}_targets"].to(DEVICE).unsqueeze(-1)).squeeze(-1)
                 phrase_log_probs = torch.sum(target_log_probs * sentence_dict[f"{prefix}_phrase_mask"].to(DEVICE), dim=1)
                 all_log_probs[temp].append(phrase_log_probs.cpu())
-
+                
         if "wug" in args.task:
             rank_and_evaluate_wug(args, subset_to_stats, all_log_probs, raw_sentences, labels, metadatas, uids, predictions)
         else:
