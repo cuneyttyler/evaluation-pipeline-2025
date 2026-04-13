@@ -43,14 +43,6 @@ class CompletionRankingDataset(Dataset):
     def __len__(self: CompletionRankingDataset):
         return len(self.data)
 
-    def adjust_tokens(self, token_ids, indice_maps):
-        token_ids = token_ids[-1, :].repeat(token_ids.shape[0], 1)
-        new_maps = []
-        for idx, map in enumerate(indice_maps):
-            new_maps.append((torch.arange(map[0].shape[0]), torch.arange(map[1].shape[0])))
-        
-        return token_ids, new_maps
-
     def process_causal_sentences(self: CompletionRankingDataset, sentence_dict: dict[str, list[str] | list[None]], image: Image | None):
         """Helper function for processing the dictionary associated with an individual
         datapoint for inference with a causal LM.
@@ -79,12 +71,6 @@ class CompletionRankingDataset(Dataset):
             offset_mapping = tokenizer_output['offset_mapping']
             maps = tokenizer_output["maps"]
             embed_image = torch.FloatTensor(tokenizer_output["pixel_values"]) if image is not None else None
-            # if len(tokens) == 1 and len(sentence) != 0:
-            #     if sentence_tokens:
-            #         sentence_tokens = sentence_tokens[0]
-                # tokens = tokens[0]
-                # attention_mask = attention_mask[0]
-                # offset_mapping = offset_mapping[0]
 
             # Phrase mask (to determine the exact tokens associated with the completion/suffix)
             start_idx = len(tokens[-1]) - len(sentence_tokens[-1])
@@ -94,13 +80,11 @@ class CompletionRankingDataset(Dataset):
                 # If token overlaps with our phrase's character span
                 if end > start_char_idx:
                     phrase_indices.append(i+start_idx)
-
+            
             phrase_mask = [0 for _ in range(len(tokens[-1]))]
             for token_idx in phrase_indices:
                 if token_idx < len(phrase_mask):
                     phrase_mask[token_idx] = 1
-
-            # tokens, maps = self.adjust_tokens(tokens, maps)
 
             processed_sentence_dict[f'sentence_{sentence_idx}_tokens'] = torch.LongTensor(tokens)
             processed_sentence_dict[f'sentence_{sentence_idx}_maps'] = maps
@@ -426,29 +410,28 @@ def get_causal_collate_fn(pad_idx):
         # First pad the tensors
         num_sentences = len([key for key in batch[0][1].keys() if key.endswith("tokens")])
         sentence_dict_with_padding = {}
-
-        tokens_list, attention_masks_list, phrase_masks_list, levels = [], [], [], 0
         for sentence_idx in range(num_sentences):
             # Tokens
-            for item in batch:
-                batch_tokens = item[1][f'sentence_{sentence_idx}_tokens']
-                levels = batch_tokens.shape[0]
-                for tokens in batch_tokens:
-                    tokens_list.append(tokens)
+            tokens = [item[1][f'sentence_{sentence_idx}_tokens'] for item in batch]
+            sequences = [_tokens.permute(1, 0) for _tokens in tokens]
+            padded_tokens = pad_sequence(sequences, batch_first=True, padding_value=pad_idx)
+            padded_tokens = padded_tokens.permute(0, 2, 1)
+            sentence_dict_with_padding[f'sentence_{sentence_idx}_inputs'] = padded_tokens[:, :, :-1]
+            sentence_dict_with_padding[f'sentence_{sentence_idx}_targets'] = padded_tokens[:, -1, 1:]
 
             # Maps
             sentence_dict_with_padding[f'sentence_{sentence_idx}_maps'] = [item[1][f'sentence_{sentence_idx}_maps'] for item in batch]
 
             # Attention mask
-            for item in batch:
-                batch_attention_masks = item[1][f'sentence_{sentence_idx}_attn_mask']
-                for attention_masks in batch_attention_masks:
-                    attention_masks_list.append(attention_masks)
+            attention_masks = [item[1][f'sentence_{sentence_idx}_attn_mask'] for item in batch]
+            sequences = [masks.permute(1, 0) for masks in attention_masks]
+            padded_tokens = pad_sequence(sequences, batch_first=True, padding_value=0)
+            padded_tokens = padded_tokens.permute(0, 2, 1)
+            sentence_dict_with_padding[f'sentence_{sentence_idx}_attn_mask'] = padded_tokens[:, :-1]
 
             # Phrase mask
             phrase_masks = [item[1][f'sentence_{sentence_idx}_phrase_mask'] for item in batch]
-            for phrase_mask in phrase_masks:
-                phrase_masks_list.append(phrase_mask)
+            sentence_dict_with_padding[f'sentence_{sentence_idx}_phrase_mask'] = pad_sequence(phrase_masks, batch_first=True, padding_value=0)[:, 1:]
 
             # Images
             images = [item[1][f'sentence_{sentence_idx}_image'] for item in batch]
@@ -457,34 +440,6 @@ def get_causal_collate_fn(pad_idx):
             else:
                 images = torch.cat(images, dim=0)
 
-        # Tokens
-        padded_tokens = pad_sequence(tokens_list, batch_first=True, padding_value=pad_idx)
-        padded_tokens = padded_tokens.view(int(padded_tokens.shape[0] / levels), levels, -1)
-
-        sentences = torch.chunk(padded_tokens, chunks=num_sentences, dim=0)
-        for sentence_idx in range(num_sentences):
-            current_sentence = sentences[sentence_idx]
-            sentence_dict_with_padding[f'sentence_{sentence_idx}_inputs'] = current_sentence[:, :, :-1]
-            sentence_dict_with_padding[f'sentence_{sentence_idx}_targets'] = current_sentence[:, -1, 1:] 
-
-        # Attention mask
-        padded_attention_masks = pad_sequence(attention_masks_list, batch_first=True, padding_value=pad_idx)
-        padded_attention_masks = padded_attention_masks.view(int(padded_attention_masks.shape[0] / levels), levels, -1)
-
-        sentences = torch.chunk(padded_attention_masks, chunks=num_sentences, dim=0)
-        for sentence_idx in range(num_sentences):
-            current_sentence = sentences[sentence_idx]
-            sentence_dict_with_padding[f'sentence_{sentence_idx}_attn_mask'] = current_sentence[:, :, :-1]
-
-        # Phrase mask
-        padded_phrase_masks = pad_sequence(phrase_masks_list, batch_first=True, padding_value=0)
-        padded_phrase_masks = padded_phrase_masks.view(padded_phrase_masks.shape[0], -1)
-        
-        sentences = torch.chunk(padded_phrase_masks, chunks=num_sentences, dim=0)
-        for sentence_idx in range(num_sentences):
-            current_sentence = sentences[sentence_idx]
-            sentence_dict_with_padding[f'sentence_{sentence_idx}_phrase_mask'] = current_sentence[:, :-1]
-
         # Next handle the labels and metadata
         sentence_dict = [item[0] for item in batch]
         labels = [item[2] for item in batch]
@@ -492,7 +447,7 @@ def get_causal_collate_fn(pad_idx):
         uids = [item[4] for item in batch]
         return sentence_dict, sentence_dict_with_padding, labels, metadatas, uids, images
     return collate_fn
-
+    
 
 def get_mlm_collate_fn(pad_idx):
     def collate_fn(batch):
