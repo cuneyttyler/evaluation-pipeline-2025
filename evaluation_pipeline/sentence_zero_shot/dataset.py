@@ -44,18 +44,11 @@ class CompletionRankingDataset(Dataset):
         return len(self.data)
 
     def process_causal_sentences(self: CompletionRankingDataset, sentence_dict: dict[str, list[str] | list[None]], image: Image | None):
-        """Helper function for processing the dictionary associated with an individual
-        datapoint for inference with a causal LM.
-
-        Args:
-            sentence_dict (dict[str, Any]): The dictionary associated with the datapoint
-        """
         sentences = sentence_dict["sentences"]
         completions = sentence_dict["completions"]
 
         processed_sentence_dict = {}
         for sentence_idx, (sentence, completion) in enumerate(zip(sentences, completions)):
-            # Basic outputs
             if image is None:
                 tokenizer_output = self.processor(text=sentence, return_offsets_mapping=True)
                 sentence_tokens = tokenizer_output["input_ids"]
@@ -66,20 +59,20 @@ class CompletionRankingDataset(Dataset):
                     image_sentence = sentence
                 tokenizer_output = self.processor(text=image_sentence, images=image, return_offsets_mapping=True)
                 sentence_tokens = self.processor(text=sentence, return_offsets_mapping=True)["input_ids"]
+            
             tokens = tokenizer_output["input_ids"]
             attention_mask = tokenizer_output["attention_mask"]
             offset_mapping = tokenizer_output['offset_mapping']
             maps = tokenizer_output["maps"]
             embed_image = torch.FloatTensor(tokenizer_output["pixel_values"]) if image is not None else None
 
-            # Phrase mask (to determine the exact tokens associated with the completion/suffix)
-            start_idx = len(tokens[-1]) - len(sentence_tokens[-1])
-            start_char_idx = len(sentence) - len(completion) + offset_mapping[-1][start_idx][0]
+            valid_len = tokens[-1][:-1].shape[0]
+            start_char_idx = offset_mapping[-1][0][0]
+            
             phrase_indices = []
-            for i, (start, end) in enumerate(offset_mapping[-1][start_idx:]):
-                # If token overlaps with our phrase's character span
+            for i, (start, end) in enumerate(offset_mapping[-1][:valid_len]):
                 if end > start_char_idx:
-                    phrase_indices.append(i+start_idx)
+                    phrase_indices.append(i)
             
             phrase_mask = [0 for _ in range(len(tokens[-1]))]
             for token_idx in phrase_indices:
@@ -420,7 +413,14 @@ def get_causal_collate_fn(pad_idx):
             sentence_dict_with_padding[f'sentence_{sentence_idx}_targets'] = padded_tokens[:, -1, 1:]
 
             # Maps
-            sentence_dict_with_padding[f'sentence_{sentence_idx}_maps'] = [item[1][f'sentence_{sentence_idx}_maps'] for item in batch]
+            num_levels = batch[0][1][f'sentence_{sentence_idx}_tokens'].shape[1]
+            batch_maps = [item[1][f'sentence_{sentence_idx}_maps'] for item in batch]
+            levels = [[] for _ in range(num_levels)]
+            for _map in batch_maps:
+                for idx, level_map in enumerate(_map):
+                    levels[idx].append(level_map)
+
+            sentence_dict_with_padding[f'sentence_{sentence_idx}_maps'] = levels
 
             # Attention mask
             attention_masks = [item[1][f'sentence_{sentence_idx}_attn_mask'] for item in batch]

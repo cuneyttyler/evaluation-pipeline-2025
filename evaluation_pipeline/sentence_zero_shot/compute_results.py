@@ -116,7 +116,6 @@ def compute_causal_results(args, model, dataloader, temperatures):
         all_log_probs = {temp : [] for temp in subset_to_stats}
         for prefix in prefixes:
             if no_image:
-                # print(sentence_dict[f"{prefix}_inputs"])
                 logits = model(
                     input_ids=sentence_dict[f"{prefix}_inputs"].to(DEVICE),
                     maps=sentence_dict[f"{prefix}_maps"],

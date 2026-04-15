@@ -9,9 +9,11 @@ DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 def get_p(sentence, word, model, tokenizer):  # gets p of word (word) given context. Relies on model and tokenizer.
     inpts = tokenizer(sentence, return_tensors="pt").to(DEVICE)
     with torch.no_grad():
-        outputs = model(**inpts)
+        input_ids = inpts["input_ids"]
+        maps = process_maps(inpts["maps"])
+        outputs = model(input_ids.unsqueeze(0), maps=maps)
         logits = get_logits(outputs)[:, -1, :].cpu()
-    target_id = tokenizer(word, add_special_tokens=False)["input_ids"][0]
+    target_id = tokenizer(word, add_special_tokens=False)["input_ids"][0][-1]
     p = torch.softmax(logits[0], dim=-1)[target_id].item()
     return p
 
@@ -77,12 +79,18 @@ def get_p_enc_dec(sentence, word, model, tokenizer):  # gets p of word (word) gi
     p = torch.softmax(logits[0], dim=-1)[target_id].item()
     return p
 
+def process_maps(maps):
+    levels = []
+    for idx, _map in enumerate(maps):
+        levels.append([_map])
+
+    return levels
 
 def get_p2(sentence, word, model, tokenizer):  # as get_p if len(tokenizer(word)) == 1; else, sums logP of subword tokens
     inpts = tokenizer(sentence, return_tensors="pt").to(DEVICE)
     with torch.no_grad():
         input_ids = inpts["input_ids"]
-        maps = inpts["maps"]
+        maps = process_maps(inpts["maps"])
         outputs = model(input_ids.unsqueeze(0), maps=maps)
         logits = get_logits(outputs)[:, -1, :].cpu()
     target = tokenizer(word, add_special_tokens=False)["input_ids"]  # Check whether tokenizer adds a whitespace to the beginning of input.
@@ -92,7 +100,7 @@ def get_p2(sentence, word, model, tokenizer):  # as get_p if len(tokenizer(word)
         return p, 0
     else:
         out_p = []
-        target_id = target[0]
+        target_id = target[0][-1]
         p = torch.softmax(logits[0], dim=-1)[target_id].item()
         out_p.append(p)
         sentence = sentence + tokenizer.decode(target_id)
