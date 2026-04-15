@@ -11,7 +11,7 @@ def get_p(sentence, word, model, tokenizer):  # gets p of word (word) given cont
     with torch.no_grad():
         outputs = model(**inpts)
         logits = get_logits(outputs)[:, -1, :].cpu()
-    target_id = tokenizer(word, add_special_tokens=False)["input_ids"][0]
+    target_id = tokenizer(word, add_special_tokens=False)["input_ids"][0, :, 0][0]
     p = torch.softmax(logits[0], dim=-1)[target_id].item()
     return p
 
@@ -85,16 +85,16 @@ def get_p2(sentence, word, model, tokenizer):  # as get_p if len(tokenizer(word)
         logits = get_logits(outputs)[:, -1, :].cpu()
     target = tokenizer(word, add_special_tokens=False)["input_ids"]  # Check whether tokenizer adds a whitespace to the beginning of input.
     if len(target) == 1:
-        target_id = target[0]
+        target_id = target[0, :, 0][0]
         p = torch.softmax(logits[0], dim=-1)[target_id].item()
         return p, 0
     else:
         out_p = []
-        target_id = target[0]
+        target_id = target[0, :, 0][0]
         p = torch.softmax(logits[0], dim=-1)[target_id].item()
         out_p.append(p)
         sentence = sentence + tokenizer.decode(target_id)
-        for token in target[1:]:
+        for token in target[0, :, 0][1:]:
             t = tokenizer.decode(token)
             p = get_p(sentence, t, model, tokenizer)
             out_p.append(p)

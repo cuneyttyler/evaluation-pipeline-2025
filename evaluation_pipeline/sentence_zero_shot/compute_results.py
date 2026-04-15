@@ -131,9 +131,6 @@ def compute_causal_results(args, model, dataloader, temperatures):
             else:
                 logits = logits["logits"]  # BxTxV
 
-            if logits.size(1) != sentence_dict[f"{prefix}_inputs"].size(1):  # Assumption is that images are prepended to the text when done post-tokenization.
-                logits = logits[:, -sentence_dict[f"{prefix}_inputs"].size(1):]
-
             for temp in subset_to_stats:
                 log_probs = F.log_softmax(logits / temp, dim=-1)
                 target_log_probs = torch.gather(log_probs, -1, sentence_dict[f"{prefix}_targets"].to(DEVICE).unsqueeze(-1)).squeeze(-1)

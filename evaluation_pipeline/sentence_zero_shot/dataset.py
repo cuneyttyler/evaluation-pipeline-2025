@@ -70,23 +70,17 @@ class CompletionRankingDataset(Dataset):
             attention_mask = tokenizer_output["attention_mask"]
             offset_mapping = tokenizer_output['offset_mapping']
             embed_image = torch.FloatTensor(tokenizer_output["pixel_values"]) if image is not None else None
-            if len(tokens) == 1 and len(sentence) != 0:
-                if sentence_tokens:
-                    sentence_tokens = sentence_tokens[0]
-                tokens = tokens[0]
-                attention_mask = attention_mask[0]
-                offset_mapping = offset_mapping[0]
 
+            # tokens shape (NUM_SYNONYMS, SEQ_LEN, N_TOKENS_PER_SYNONYM), so we use [0, :, 0] to get original text's tokens
             # Phrase mask (to determine the exact tokens associated with the completion/suffix)
-            start_idx = len(tokens) - len(sentence_tokens)
+            start_idx = len(tokens[0, :, 0]) - len(sentence_tokens[0, :, 0])
             start_char_idx = len(sentence) - len(completion) + offset_mapping[start_idx][0]
             phrase_indices = []
             for i, (start, end) in enumerate(offset_mapping[start_idx:]):
                 # If token overlaps with our phrase's character span
                 if end > start_char_idx:
                     phrase_indices.append(i+start_idx)
-
-            phrase_mask = [0 for _ in range(len(tokens))]
+            phrase_mask = [0 for _ in range(len(tokens[0, :, 0]))]
             for token_idx in phrase_indices:
                 phrase_mask[token_idx] = 1
 
@@ -407,6 +401,10 @@ def get_collate_fn(args: argparse.ArgumentParser, pad_idx: int):
     elif args.backend == "enc_dec_prefix":
         return get_enc_dec_prefix_collate_fn(pad_idx)
 
+def pad_hierarchical_tokens(tokens_list, pad_idx):
+    transposed = [t.transpose(0, 1) for t in tokens_list]
+    padded = pad_sequence(transposed, batch_first=True, padding_value=pad_idx)
+    return padded.transpose(1, 2)
 
 def get_causal_collate_fn(pad_idx):
     def collate_fn(batch):
@@ -416,9 +414,9 @@ def get_causal_collate_fn(pad_idx):
         for sentence_idx in range(num_sentences):
             # Tokens
             tokens = [item[1][f'sentence_{sentence_idx}_tokens'] for item in batch]
-            padded_tokens = pad_sequence(tokens, batch_first=True, padding_value=pad_idx)
-            sentence_dict_with_padding[f'sentence_{sentence_idx}_inputs'] = padded_tokens[:, :-1]
-            sentence_dict_with_padding[f'sentence_{sentence_idx}_targets'] = padded_tokens[:, 1:]
+            padded_tokens = pad_hierarchical_tokens(tokens, pad_idx)
+            sentence_dict_with_padding[f'sentence_{sentence_idx}_inputs'] = padded_tokens[:, :, :-1, :]
+            sentence_dict_with_padding[f'sentence_{sentence_idx}_targets'] = padded_tokens[:, 0, 1:, 0]
 
             # Attention mask
             attention_masks = [item[1][f'sentence_{sentence_idx}_attn_mask'] for item in batch]
